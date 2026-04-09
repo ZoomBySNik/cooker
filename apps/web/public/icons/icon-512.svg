@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cooker icon">
+  <rect width="512" height="512" rx="108" fill="#1e3a8a" />
+  <path d="M108 152h296v42H108z" fill="#bfdbfe" />
+  <rect x="142" y="194" width="228" height="148" rx="32" fill="#f8fafc" />
+  <circle cx="204" cy="270" r="20" fill="#0f766e" />
+  <circle cx="256" cy="270" r="20" fill="#0f766e" />
+  <circle cx="308" cy="270" r="20" fill="#0f766e" />
+  <rect x="196" y="352" width="120" height="26" rx="13" fill="#bfdbfe" />
+</svg>
