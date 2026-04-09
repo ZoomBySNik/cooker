@@ -84,6 +84,8 @@ const saveProduct = async () => {
     const enrichedPayload: ProductPayload = {
       ...payload,
       theme: payload.theme || enrichment.theme,
+      imageUrl: enrichment.imageUrl,
+      nutrition: enrichment.nutrition,
       quantityPercent: enrichment.quantityPercent,
       expiryPercent: enrichment.expiryPercent,
       expiresAt: enrichment.expiresAt ?? payload.expiresAt
@@ -109,7 +111,7 @@ const startEdit = (product: ProductCard) => {
   form.value = {
     emoji: product.emoji,
     name: product.name,
-    quantityInput: `${product.quantityPercent}% от дневной нормы`,
+    quantityInput: product.quantityInput ?? '',
     theme: product.theme ?? '',
     expiresAt: product.expiresAt ? product.expiresAt.slice(0, 10) : ''
   }
@@ -148,7 +150,7 @@ const enrichmentHint = computed(() => {
     ? `авто-срок до ${new Date(enrichmentInfo.value.expiresAt).toLocaleDateString('ru-RU')}`
     : 'авто-срок не удалось вычислить'
 
-  return `КБЖУ (на 100 г): ${Math.round(n.kcalPer100g)} ккал / Б ${n.proteinPer100g.toFixed(1)} / Ж ${n.fatPer100g.toFixed(1)} / У ${n.carbsPer100g.toFixed(1)}. ${expiryText}.`
+  return `Open Food Facts: КБЖУ (на 100 г): ${Math.round(n.kcalPer100g)} ккал / Б ${n.proteinPer100g.toFixed(1)} / Ж ${n.fatPer100g.toFixed(1)} / У ${n.carbsPer100g.toFixed(1)}. ${expiryText}.`
 })
 
 onMounted(() => {
@@ -161,8 +163,8 @@ onMounted(() => {
     <h2>Продукты</h2>
     <p class="subtitle">Добавляйте продукт + количество, остальное рассчитывается автоматически</p>
     <p class="intro">
-      Форма отправляет запрос во внешние источники: получает КБЖУ и категорию продукта, пересчитывает количество в
-      относительный объём для 1 человека и, если дата не указана, пробует рассчитать срок годности по условиям хранения.
+      Форма отправляет запрос в Open Food Facts: получает КБЖУ и раздел магазина,
+      а также рассчитывает срок годности, если дата вручную не указана.
     </p>
 
     <form class="product-form" @submit.prevent="saveProduct">
@@ -185,8 +187,8 @@ onMounted(() => {
         </label>
 
         <label>
-          Тематика (необязательно)
-          <input v-model="form.theme" type="text" placeholder="Оставьте пустым для автоопределения" />
+          Раздел магазина (необязательно)
+          <input v-model="form.theme" type="text" placeholder="Оставьте пустым для автоопределения из Open Food Facts" />
         </label>
 
         <label>
@@ -212,12 +214,17 @@ onMounted(() => {
     <div v-else class="products-grid">
       <article v-for="product in products" :key="product.id" class="product-card">
         <header class="product-header">
-          <div class="emoji">{{ product.emoji }}</div>
+          <img v-if="product.imageUrl" class="product-image" :src="product.imageUrl" :alt="product.name" loading="lazy" />
+          <div v-else class="emoji">{{ product.emoji }}</div>
           <div>
             <h3>{{ product.name }}</h3>
-            <p class="product-theme">{{ product.theme || 'Тематика не указана' }}</p>
+            <p class="product-theme">{{ product.theme || 'Раздел магазина не указан' }}</p>
           </div>
         </header>
+
+        <p class="kbju">
+          КБЖУ/100г: {{ Math.round(product.nutrition?.kcalPer100g ?? 0) }} ккал · Б {{ (product.nutrition?.proteinPer100g ?? 0).toFixed(1) }} · Ж {{ (product.nutrition?.fatPer100g ?? 0).toFixed(1) }} · У {{ (product.nutrition?.carbsPer100g ?? 0).toFixed(1) }}
+        </p>
 
         <div class="metric">
           <div class="metric-title">
@@ -370,6 +377,20 @@ button {
 
 .emoji {
   font-size: 1.6rem;
+}
+
+.product-image {
+  width: 48px;
+  height: 48px;
+  border-radius: 0.5rem;
+  object-fit: cover;
+  border: 1px solid #cbd5e1;
+}
+
+.kbju {
+  margin: 0.5rem 0 0;
+  color: #334155;
+  font-size: 0.8rem;
 }
 
 .metric {

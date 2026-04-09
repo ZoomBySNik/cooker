@@ -1,10 +1,20 @@
 import type { FastifyInstance } from 'fastify'
 
+type ProductNutrition = {
+  kcalPer100g: number
+  proteinPer100g: number
+  fatPer100g: number
+  carbsPer100g: number
+}
+
 type ProductCard = {
   id: string
   emoji: string
   name: string
   theme?: string
+  quantityInput?: string
+  imageUrl?: string
+  nutrition?: ProductNutrition
   quantityPercent: number
   expiryPercent?: number
   expiresAt?: string
@@ -17,6 +27,8 @@ type UpsertProductPayload = {
   name?: string
   quantityInput?: string
   theme?: string
+  imageUrl?: string
+  nutrition?: ProductNutrition
   quantityPercent?: number
   expiryPercent?: number
   expiresAt?: string
@@ -32,6 +44,8 @@ type OpenFoodFactsSearchResponse = {
   products?: Array<{
     product_name?: string
     product_name_ru?: string
+    image_front_url?: string
+    image_url?: string
     nutriments?: {
       'energy-kcal_100g'?: number
       proteins_100g?: number
@@ -61,9 +75,16 @@ const seedProducts = () => {
       id: crypto.randomUUID(),
       emoji: '🥛',
       name: 'Молоко',
-      theme: 'Завтрак',
+      theme: 'Молочные продукты',
+      quantityInput: '1 л',
       quantityPercent: 70,
       expiryPercent: 45,
+      nutrition: {
+        kcalPer100g: 60,
+        proteinPer100g: 3,
+        fatPer100g: 3,
+        carbsPer100g: 5
+      },
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 3).toISOString(),
       createdAt,
       updatedAt: createdAt
@@ -72,9 +93,16 @@ const seedProducts = () => {
       id: crypto.randomUUID(),
       emoji: '🍅',
       name: 'Томаты',
-      theme: 'Салаты',
+      theme: 'Овощи и фрукты',
+      quantityInput: '600 г',
       quantityPercent: 40,
       expiryPercent: 30,
+      nutrition: {
+        kcalPer100g: 18,
+        proteinPer100g: 0.9,
+        fatPer100g: 0.2,
+        carbsPer100g: 3.9
+      },
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 2).toISOString(),
       createdAt,
       updatedAt: createdAt
@@ -88,7 +116,7 @@ const toProductResponse = () => ({
   items: Array.from(products.values()).sort((a, b) => a.name.localeCompare(b.name, 'ru'))
 })
 
-const pickNutrition = (payload: OpenFoodFactsSearchResponse) => {
+const pickProductFromOpenFoodFacts = (payload: OpenFoodFactsSearchResponse) => {
   const product = payload.products?.find((item) => {
     const n = item.nutriments
     return n && typeof n['energy-kcal_100g'] === 'number'
@@ -97,65 +125,45 @@ const pickNutrition = (payload: OpenFoodFactsSearchResponse) => {
   const nutrients = product?.nutriments
 
   return {
-    kcalPer100g: nutrients?.['energy-kcal_100g'] ?? 60,
-    proteinPer100g: nutrients?.proteins_100g ?? 1,
-    fatPer100g: nutrients?.fat_100g ?? 1,
-    carbsPer100g: nutrients?.carbohydrates_100g ?? 5,
+    nutrition: {
+      kcalPer100g: nutrients?.['energy-kcal_100g'] ?? 60,
+      proteinPer100g: nutrients?.proteins_100g ?? 1,
+      fatPer100g: nutrients?.fat_100g ?? 1,
+      carbsPer100g: nutrients?.carbohydrates_100g ?? 5
+    },
     categories: product?.categories_tags ?? [],
-    storage: product?.conservation_conditions || product?.storage_conditions || ''
+    storage: product?.conservation_conditions || product?.storage_conditions || '',
+    imageUrl: product?.image_front_url || product?.image_url || undefined
   }
 }
 
-const detectTheme = (categories: string[]): string | undefined => {
+const detectStoreSection = (categories: string[]): string => {
   const joined = categories.join(' ').toLowerCase()
 
-  if (!joined) {
-    return undefined
-  }
+  if (/milk|dairy|cheese|yogurt|молок|сыр|йогурт/.test(joined)) return 'Молочные продукты'
+  if (/meat|poultry|beef|pork|мяс/.test(joined)) return 'Мясо и птица'
+  if (/fish|seafood|рыб|морепродукт/.test(joined)) return 'Рыба и морепродукты'
+  if (/vegetable|fruit|tomato|greens|овощ|фрукт|зелень/.test(joined)) return 'Овощи и фрукты'
+  if (/bakery|bread|biscuit|хлеб|выпечк/.test(joined)) return 'Хлеб и выпечка'
+  if (/cereal|pasta|rice|круп|макарон|рис/.test(joined)) return 'Крупы и бакалея'
+  if (/drink|juice|water|напит/.test(joined)) return 'Напитки'
 
-  if (/breakfast|cereals|yogurt|milk|cheese/.test(joined)) {
-    return 'Завтрак'
-  }
-  if (/meat|fish|protein|poultry/.test(joined)) {
-    return 'Белковые блюда'
-  }
-  if (/vegetable|salad|tomato|cucumber|greens/.test(joined)) {
-    return 'Салаты'
-  }
-  if (/snack|dessert|sweet/.test(joined)) {
-    return 'Перекус'
-  }
-
-  return 'Универсальное'
+  return 'Прочее'
 }
 
 const parseQuantityToGrams = (value: string): number => {
   const normalized = value.toLowerCase().replace(',', '.').trim()
   const match = normalized.match(/(\d+(?:\.\d+)?)/)
-  if (!match) {
-    return 250
-  }
+  if (!match) return 250
 
   const amount = Number(match[1])
-  if (!Number.isFinite(amount)) {
-    return 250
-  }
+  if (!Number.isFinite(amount)) return 250
 
-  if (/кг|kg/.test(normalized)) {
-    return amount * 1000
-  }
-  if (/г|гр|gram|g\b/.test(normalized)) {
-    return amount
-  }
-  if (/л|liter|litre|l\b/.test(normalized)) {
-    return amount * 1000
-  }
-  if (/мл|ml/.test(normalized)) {
-    return amount
-  }
-  if (/шт|piece|pcs|упак|pack/.test(normalized)) {
-    return amount * 180
-  }
+  if (/кг|kg/.test(normalized)) return amount * 1000
+  if (/г|гр|gram|g\b/.test(normalized)) return amount
+  if (/л|liter|litre|l\b/.test(normalized)) return amount * 1000
+  if (/мл|ml/.test(normalized)) return amount
+  if (/шт|piece|pcs|упак|pack/.test(normalized)) return amount * 180
 
   return amount
 }
@@ -167,29 +175,17 @@ const quantityPercentForOnePerson = (quantityGrams: number, kcalPer100g: number)
 }
 
 const parseStorageDays = (storageText: string): number | undefined => {
-  if (!storageText) {
-    return undefined
-  }
+  if (!storageText) return undefined
 
   const normalized = storageText.toLowerCase()
   const value = normalized.match(/(\d+(?:\.\d+)?)\s*(day|days|дн|день|дня|дней|week|weeks|нед|месяц|month)/)
-
-  if (!value) {
-    return undefined
-  }
+  if (!value) return undefined
 
   const amount = Number(value[1])
-  if (!Number.isFinite(amount)) {
-    return undefined
-  }
+  if (!Number.isFinite(amount)) return undefined
 
-  if (/week|weeks|нед/.test(value[2])) {
-    return amount * 7
-  }
-
-  if (/месяц|month/.test(value[2])) {
-    return amount * 30
-  }
+  if (/week|weeks|нед/.test(value[2])) return amount * 7
+  if (/месяц|month/.test(value[2])) return amount * 30
 
   return amount
 }
@@ -208,15 +204,18 @@ const deriveExpiry = (inputExpiresAt: string | undefined, storageText: string, p
   if (inputExpiresAt?.trim()) {
     const target = new Date(inputExpiresAt)
     const daysLeft = Math.ceil((target.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-    const expiryPercent = clampPercent((daysLeft / 30) * 100)
-    return { expiresAt: target.toISOString(), expiryPercent }
+    return {
+      expiresAt: target.toISOString(),
+      expiryPercent: clampPercent((daysLeft / 30) * 100)
+    }
   }
 
   const shelfLifeDays = parseStorageDays(storageText) ?? fallbackShelfLifeDays(productName)
   const expiresAt = new Date(Date.now() + shelfLifeDays * 24 * 60 * 60 * 1000).toISOString()
-  const expiryPercent = clampPercent((shelfLifeDays / 30) * 100)
-
-  return { expiresAt, expiryPercent }
+  return {
+    expiresAt,
+    expiryPercent: clampPercent((shelfLifeDays / 30) * 100)
+  }
 }
 
 const enrichFromOpenFoodFacts = async (name: string, quantityInput: string, expiresAt?: string) => {
@@ -230,22 +229,18 @@ const enrichFromOpenFoodFacts = async (name: string, quantityInput: string, expi
   }
 
   const payload = (await response.json()) as OpenFoodFactsSearchResponse
-  const nutrition = pickNutrition(payload)
+  const off = pickProductFromOpenFoodFacts(payload)
   const quantityGrams = parseQuantityToGrams(quantityInput)
-  const quantityPercent = quantityPercentForOnePerson(quantityGrams, nutrition.kcalPer100g)
-  const expiry = deriveExpiry(expiresAt, nutrition.storage, name)
+  const quantityPercent = quantityPercentForOnePerson(quantityGrams, off.nutrition.kcalPer100g)
+  const expiry = deriveExpiry(expiresAt, off.storage, name)
 
   return {
     quantityPercent,
     expiryPercent: expiry.expiryPercent,
     expiresAt: expiry.expiresAt,
-    theme: detectTheme(nutrition.categories),
-    nutrition: {
-      kcalPer100g: nutrition.kcalPer100g,
-      proteinPer100g: nutrition.proteinPer100g,
-      fatPer100g: nutrition.fatPer100g,
-      carbsPer100g: nutrition.carbsPer100g
-    },
+    theme: detectStoreSection(off.categories),
+    imageUrl: off.imageUrl,
+    nutrition: off.nutrition,
     source: 'OpenFoodFacts'
   }
 }
@@ -253,9 +248,7 @@ const enrichFromOpenFoodFacts = async (name: string, quantityInput: string, expi
 export const registerProductsRoutes = (app: FastifyInstance) => {
   seedProducts()
 
-  app.get('/products', async () => {
-    return toProductResponse()
-  })
+  app.get('/products', async () => toProductResponse())
 
   app.post<{ Body: EnrichRequest }>('/products/enrich', async (request, reply) => {
     const name = request.body.name?.trim()
@@ -265,12 +258,11 @@ export const registerProductsRoutes = (app: FastifyInstance) => {
       return reply.status(400).send({ message: 'Fields "name" and "quantityInput" are required.' })
     }
 
-    const enriched = await enrichFromOpenFoodFacts(name, quantityInput, request.body.expiresAt)
-    return enriched
+    return enrichFromOpenFoodFacts(name, quantityInput, request.body.expiresAt)
   })
 
   app.post<{ Body: UpsertProductPayload }>('/products', async (request, reply) => {
-    const { emoji, name, theme, quantityPercent, expiryPercent, expiresAt, quantityInput } = request.body
+    const { emoji, name, theme, imageUrl, nutrition, quantityPercent, expiryPercent, expiresAt, quantityInput } = request.body
 
     if (!name?.trim() || !emoji?.trim()) {
       return reply.status(400).send({ message: 'Fields "name" and "emoji" are required.' })
@@ -282,6 +274,9 @@ export const registerProductsRoutes = (app: FastifyInstance) => {
       emoji: emoji.trim(),
       name: name.trim(),
       theme: theme?.trim() || undefined,
+      quantityInput: quantityInput?.trim() || undefined,
+      imageUrl: imageUrl?.trim() || undefined,
+      nutrition,
       quantityPercent: clampPercent(quantityPercent ?? (quantityInput ? parseQuantityToGrams(quantityInput) / 10 : 0)),
       expiryPercent: expiryPercent === undefined ? undefined : clampPercent(expiryPercent),
       expiresAt: expiresAt?.trim() || undefined,
@@ -290,14 +285,11 @@ export const registerProductsRoutes = (app: FastifyInstance) => {
     }
 
     products.set(item.id, item)
-
     return reply.status(201).send(item)
   })
 
   app.patch<{ Params: { id: string }; Body: UpsertProductPayload }>('/products/:id', async (request, reply) => {
-    const { id } = request.params
-    const existing = products.get(id)
-
+    const existing = products.get(request.params.id)
     if (!existing) {
       return reply.status(404).send({ message: 'Product not found.' })
     }
@@ -307,27 +299,25 @@ export const registerProductsRoutes = (app: FastifyInstance) => {
       ...('emoji' in request.body ? { emoji: request.body.emoji?.trim() || existing.emoji } : {}),
       ...('name' in request.body ? { name: request.body.name?.trim() || existing.name } : {}),
       ...('theme' in request.body ? { theme: request.body.theme?.trim() || undefined } : {}),
+      ...('quantityInput' in request.body ? { quantityInput: request.body.quantityInput?.trim() || undefined } : {}),
+      ...('imageUrl' in request.body ? { imageUrl: request.body.imageUrl?.trim() || undefined } : {}),
+      ...('nutrition' in request.body ? { nutrition: request.body.nutrition } : {}),
       ...('quantityPercent' in request.body
         ? { quantityPercent: clampPercent(request.body.quantityPercent ?? existing.quantityPercent) }
         : {}),
       ...('expiryPercent' in request.body
-        ? {
-            expiryPercent:
-              request.body.expiryPercent === undefined ? undefined : clampPercent(request.body.expiryPercent)
-          }
+        ? { expiryPercent: request.body.expiryPercent === undefined ? undefined : clampPercent(request.body.expiryPercent) }
         : {}),
       ...('expiresAt' in request.body ? { expiresAt: request.body.expiresAt?.trim() || undefined } : {}),
       updatedAt: nowIso()
     }
 
-    products.set(id, next)
+    products.set(request.params.id, next)
     return next
   })
 
   app.delete<{ Params: { id: string } }>('/products/:id', async (request, reply) => {
-    const removed = products.delete(request.params.id)
-
-    if (!removed) {
+    if (!products.delete(request.params.id)) {
       return reply.status(404).send({ message: 'Product not found.' })
     }
 

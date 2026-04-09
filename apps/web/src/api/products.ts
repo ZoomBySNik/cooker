@@ -1,8 +1,18 @@
+export type ProductNutrition = {
+  kcalPer100g: number
+  proteinPer100g: number
+  fatPer100g: number
+  carbsPer100g: number
+}
+
 export type ProductCard = {
   id: string
   emoji: string
   name: string
   theme?: string
+  quantityInput?: string
+  imageUrl?: string
+  nutrition?: ProductNutrition
   quantityPercent: number
   expiryPercent?: number
   expiresAt?: string
@@ -15,6 +25,8 @@ export type ProductPayload = {
   name: string
   quantityInput: string
   theme?: string
+  imageUrl?: string
+  nutrition?: ProductNutrition
   quantityPercent?: number
   expiryPercent?: number
   expiresAt?: string
@@ -31,13 +43,9 @@ export type ProductEnrichmentResult = {
   expiryPercent?: number
   expiresAt?: string
   theme?: string
-  nutrition: {
-    kcalPer100g: number
-    proteinPer100g: number
-    fatPer100g: number
-    carbsPer100g: number
-  }
-  source: string
+  imageUrl?: string
+  nutrition: ProductNutrition
+  source: 'OpenFoodFacts'
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000'
@@ -62,7 +70,7 @@ export const enrichProduct = async (payload: ProductEnrichmentPayload): Promise<
   })
 
   if (!response.ok) {
-    throw new Error('Не удалось получить КБЖУ и срок хранения из внешних источников')
+    throw new Error('Не удалось получить КБЖУ и срок хранения из Open Food Facts')
   }
 
   return (await response.json()) as ProductEnrichmentResult
