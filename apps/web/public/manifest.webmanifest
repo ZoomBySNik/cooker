@@ -1,0 +1,24 @@
+{
+  "name": "Cooker",
+  "short_name": "Cooker",
+  "description": "Адаптивный кухонный ассистент с офлайн-доступом к основным экранам",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#1e3a8a",
+  "lang": "ru",
+  "icons": [
+    {
+      "src": "/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
