@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:web": "npm run dev --workspace @cooker/web",
+    "dev:web": "npm run dev --workspace @cooker/web --host",
     "dev:api": "npm run dev --workspace @cooker/api",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
