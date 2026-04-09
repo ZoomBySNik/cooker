@@ -15,10 +15,33 @@ type ProductCard = {
 type UpsertProductPayload = {
   emoji?: string
   name?: string
+  quantityInput?: string
   theme?: string
   quantityPercent?: number
   expiryPercent?: number
   expiresAt?: string
+}
+
+type EnrichRequest = {
+  name?: string
+  quantityInput?: string
+  expiresAt?: string
+}
+
+type OpenFoodFactsSearchResponse = {
+  products?: Array<{
+    product_name?: string
+    product_name_ru?: string
+    nutriments?: {
+      'energy-kcal_100g'?: number
+      proteins_100g?: number
+      fat_100g?: number
+      carbohydrates_100g?: number
+    }
+    categories_tags?: string[]
+    conservation_conditions?: string
+    storage_conditions?: string
+  }>
 }
 
 const products = new Map<string, ProductCard>()
@@ -65,6 +88,168 @@ const toProductResponse = () => ({
   items: Array.from(products.values()).sort((a, b) => a.name.localeCompare(b.name, 'ru'))
 })
 
+const pickNutrition = (payload: OpenFoodFactsSearchResponse) => {
+  const product = payload.products?.find((item) => {
+    const n = item.nutriments
+    return n && typeof n['energy-kcal_100g'] === 'number'
+  })
+
+  const nutrients = product?.nutriments
+
+  return {
+    kcalPer100g: nutrients?.['energy-kcal_100g'] ?? 60,
+    proteinPer100g: nutrients?.proteins_100g ?? 1,
+    fatPer100g: nutrients?.fat_100g ?? 1,
+    carbsPer100g: nutrients?.carbohydrates_100g ?? 5,
+    categories: product?.categories_tags ?? [],
+    storage: product?.conservation_conditions || product?.storage_conditions || ''
+  }
+}
+
+const detectTheme = (categories: string[]): string | undefined => {
+  const joined = categories.join(' ').toLowerCase()
+
+  if (!joined) {
+    return undefined
+  }
+
+  if (/breakfast|cereals|yogurt|milk|cheese/.test(joined)) {
+    return 'Завтрак'
+  }
+  if (/meat|fish|protein|poultry/.test(joined)) {
+    return 'Белковые блюда'
+  }
+  if (/vegetable|salad|tomato|cucumber|greens/.test(joined)) {
+    return 'Салаты'
+  }
+  if (/snack|dessert|sweet/.test(joined)) {
+    return 'Перекус'
+  }
+
+  return 'Универсальное'
+}
+
+const parseQuantityToGrams = (value: string): number => {
+  const normalized = value.toLowerCase().replace(',', '.').trim()
+  const match = normalized.match(/(\d+(?:\.\d+)?)/)
+  if (!match) {
+    return 250
+  }
+
+  const amount = Number(match[1])
+  if (!Number.isFinite(amount)) {
+    return 250
+  }
+
+  if (/кг|kg/.test(normalized)) {
+    return amount * 1000
+  }
+  if (/г|гр|gram|g\b/.test(normalized)) {
+    return amount
+  }
+  if (/л|liter|litre|l\b/.test(normalized)) {
+    return amount * 1000
+  }
+  if (/мл|ml/.test(normalized)) {
+    return amount
+  }
+  if (/шт|piece|pcs|упак|pack/.test(normalized)) {
+    return amount * 180
+  }
+
+  return amount
+}
+
+const quantityPercentForOnePerson = (quantityGrams: number, kcalPer100g: number): number => {
+  const totalKcal = (quantityGrams / 100) * Math.max(kcalPer100g, 1)
+  const oneDayNeedKcal = 2000
+  return clampPercent((totalKcal / oneDayNeedKcal) * 100)
+}
+
+const parseStorageDays = (storageText: string): number | undefined => {
+  if (!storageText) {
+    return undefined
+  }
+
+  const normalized = storageText.toLowerCase()
+  const value = normalized.match(/(\d+(?:\.\d+)?)\s*(day|days|дн|день|дня|дней|week|weeks|нед|месяц|month)/)
+
+  if (!value) {
+    return undefined
+  }
+
+  const amount = Number(value[1])
+  if (!Number.isFinite(amount)) {
+    return undefined
+  }
+
+  if (/week|weeks|нед/.test(value[2])) {
+    return amount * 7
+  }
+
+  if (/месяц|month/.test(value[2])) {
+    return amount * 30
+  }
+
+  return amount
+}
+
+const fallbackShelfLifeDays = (name: string): number => {
+  const normalized = name.toLowerCase()
+  if (/молок|milk|йогурт|yogurt|кефир/.test(normalized)) return 5
+  if (/рыб|fish|морепродукт/.test(normalized)) return 2
+  if (/мяс|chicken|beef|pork/.test(normalized)) return 3
+  if (/сыр|cheese/.test(normalized)) return 14
+  if (/томат|огур|салат|зелень|apple|banana|овощ|фрукт/.test(normalized)) return 7
+  return 10
+}
+
+const deriveExpiry = (inputExpiresAt: string | undefined, storageText: string, productName: string) => {
+  if (inputExpiresAt?.trim()) {
+    const target = new Date(inputExpiresAt)
+    const daysLeft = Math.ceil((target.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    const expiryPercent = clampPercent((daysLeft / 30) * 100)
+    return { expiresAt: target.toISOString(), expiryPercent }
+  }
+
+  const shelfLifeDays = parseStorageDays(storageText) ?? fallbackShelfLifeDays(productName)
+  const expiresAt = new Date(Date.now() + shelfLifeDays * 24 * 60 * 60 * 1000).toISOString()
+  const expiryPercent = clampPercent((shelfLifeDays / 30) * 100)
+
+  return { expiresAt, expiryPercent }
+}
+
+const enrichFromOpenFoodFacts = async (name: string, quantityInput: string, expiresAt?: string) => {
+  const endpoint = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(
+    name
+  )}&search_simple=1&action=process&json=1&page_size=12`
+
+  const response = await fetch(endpoint)
+  if (!response.ok) {
+    throw new Error('Failed to query OpenFoodFacts')
+  }
+
+  const payload = (await response.json()) as OpenFoodFactsSearchResponse
+  const nutrition = pickNutrition(payload)
+  const quantityGrams = parseQuantityToGrams(quantityInput)
+  const quantityPercent = quantityPercentForOnePerson(quantityGrams, nutrition.kcalPer100g)
+  const expiry = deriveExpiry(expiresAt, nutrition.storage, name)
+
+  return {
+    quantityPercent,
+    expiryPercent: expiry.expiryPercent,
+    expiresAt: expiry.expiresAt,
+    theme: detectTheme(nutrition.categories),
+    nutrition: {
+      kcalPer100g: nutrition.kcalPer100g,
+      proteinPer100g: nutrition.proteinPer100g,
+      fatPer100g: nutrition.fatPer100g,
+      carbsPer100g: nutrition.carbsPer100g
+    },
+    source: 'OpenFoodFacts'
+  }
+}
+
 export const registerProductsRoutes = (app: FastifyInstance) => {
   seedProducts()
 
@@ -72,8 +257,20 @@ export const registerProductsRoutes = (app: FastifyInstance) => {
     return toProductResponse()
   })
 
+  app.post<{ Body: EnrichRequest }>('/products/enrich', async (request, reply) => {
+    const name = request.body.name?.trim()
+    const quantityInput = request.body.quantityInput?.trim()
+
+    if (!name || !quantityInput) {
+      return reply.status(400).send({ message: 'Fields "name" and "quantityInput" are required.' })
+    }
+
+    const enriched = await enrichFromOpenFoodFacts(name, quantityInput, request.body.expiresAt)
+    return enriched
+  })
+
   app.post<{ Body: UpsertProductPayload }>('/products', async (request, reply) => {
-    const { emoji, name, theme, quantityPercent, expiryPercent, expiresAt } = request.body
+    const { emoji, name, theme, quantityPercent, expiryPercent, expiresAt, quantityInput } = request.body
 
     if (!name?.trim() || !emoji?.trim()) {
       return reply.status(400).send({ message: 'Fields "name" and "emoji" are required.' })
@@ -85,7 +282,7 @@ export const registerProductsRoutes = (app: FastifyInstance) => {
       emoji: emoji.trim(),
       name: name.trim(),
       theme: theme?.trim() || undefined,
-      quantityPercent: clampPercent(quantityPercent ?? 0),
+      quantityPercent: clampPercent(quantityPercent ?? (quantityInput ? parseQuantityToGrams(quantityInput) / 10 : 0)),
       expiryPercent: expiryPercent === undefined ? undefined : clampPercent(expiryPercent),
       expiresAt: expiresAt?.trim() || undefined,
       createdAt,

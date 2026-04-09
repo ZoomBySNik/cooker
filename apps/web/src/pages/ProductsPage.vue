@@ -1,20 +1,30 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { createProduct, fetchProducts, removeProduct, updateProduct, type ProductCard, type ProductPayload } from '../api/products'
+import { computed, onMounted, ref } from 'vue'
+import {
+  createProduct,
+  enrichProduct,
+  fetchProducts,
+  removeProduct,
+  updateProduct,
+  type ProductCard,
+  type ProductPayload,
+  type ProductEnrichmentResult
+} from '../api/products'
 
 const emojiOptions = ['🍎', '🍌', '🥕', '🥔', '🥛', '🧀', '🍞', '🥩', '🐟', '🍗', '🥚', '🍅', '🥬', '🥦', '🫘']
 
 const products = ref<ProductCard[]>([])
 const isLoading = ref(false)
+const isEnriching = ref(false)
 const errorMessage = ref('')
 const activeEditId = ref<string | null>(null)
+const enrichmentInfo = ref<ProductEnrichmentResult | null>(null)
 
 const form = ref<ProductPayload>({
   emoji: emojiOptions[0],
   name: '',
-  quantityPercent: 50,
+  quantityInput: '',
   theme: '',
-  expiryPercent: 50,
   expiresAt: ''
 })
 
@@ -22,23 +32,14 @@ const resetForm = () => {
   form.value = {
     emoji: emojiOptions[0],
     name: '',
-    quantityPercent: 50,
+    quantityInput: '',
     theme: '',
-    expiryPercent: 50,
     expiresAt: ''
   }
+  enrichmentInfo.value = null
   activeEditId.value = null
   errorMessage.value = ''
 }
-
-const toPayload = (): ProductPayload => ({
-  emoji: form.value.emoji,
-  name: form.value.name.trim(),
-  quantityPercent: form.value.quantityPercent,
-  ...(form.value.theme?.trim() ? { theme: form.value.theme.trim() } : {}),
-  ...(form.value.expiryPercent === undefined ? {} : { expiryPercent: form.value.expiryPercent }),
-  ...(form.value.expiresAt ? { expiresAt: new Date(form.value.expiresAt).toISOString() } : {})
-})
 
 const loadProducts = async () => {
   isLoading.value = true
@@ -53,27 +54,53 @@ const loadProducts = async () => {
   }
 }
 
+const buildPayload = (): ProductPayload => ({
+  emoji: form.value.emoji,
+  name: form.value.name.trim(),
+  quantityInput: form.value.quantityInput.trim(),
+  ...(form.value.theme?.trim() ? { theme: form.value.theme.trim() } : {}),
+  ...(form.value.expiresAt ? { expiresAt: new Date(form.value.expiresAt).toISOString() } : {})
+})
+
 const saveProduct = async () => {
   errorMessage.value = ''
 
-  if (!form.value.name.trim()) {
-    errorMessage.value = 'Укажите название продукта'
+  if (!form.value.name.trim() || !form.value.quantityInput.trim()) {
+    errorMessage.value = 'Укажите продукт и количество в свободном формате (например, 750 г или 2 пачки)'
     return
   }
 
-  const payload = toPayload()
+  const payload = buildPayload()
 
   try {
+    isEnriching.value = true
+    const enrichment = await enrichProduct({
+      name: payload.name,
+      quantityInput: payload.quantityInput,
+      expiresAt: payload.expiresAt
+    })
+    enrichmentInfo.value = enrichment
+
+    const enrichedPayload: ProductPayload = {
+      ...payload,
+      theme: payload.theme || enrichment.theme,
+      quantityPercent: enrichment.quantityPercent,
+      expiryPercent: enrichment.expiryPercent,
+      expiresAt: enrichment.expiresAt ?? payload.expiresAt
+    }
+
     if (activeEditId.value) {
-      await updateProduct(activeEditId.value, payload)
+      await updateProduct(activeEditId.value, enrichedPayload)
     } else {
-      await createProduct(payload)
+      await createProduct(enrichedPayload)
     }
 
     await loadProducts()
     resetForm()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Ошибка сохранения продукта'
+  } finally {
+    isEnriching.value = false
   }
 }
 
@@ -82,11 +109,11 @@ const startEdit = (product: ProductCard) => {
   form.value = {
     emoji: product.emoji,
     name: product.name,
+    quantityInput: `${product.quantityPercent}% от дневной нормы`,
     theme: product.theme ?? '',
-    quantityPercent: product.quantityPercent,
-    expiryPercent: product.expiryPercent,
     expiresAt: product.expiresAt ? product.expiresAt.slice(0, 10) : ''
   }
+  enrichmentInfo.value = null
 }
 
 const deleteProduct = async (id: string) => {
@@ -111,6 +138,19 @@ const expiryLabel = (product: ProductCard): string => {
   return 'Срок годности не задан'
 }
 
+const enrichmentHint = computed(() => {
+  if (!enrichmentInfo.value) {
+    return ''
+  }
+
+  const n = enrichmentInfo.value.nutrition
+  const expiryText = enrichmentInfo.value.expiresAt
+    ? `авто-срок до ${new Date(enrichmentInfo.value.expiresAt).toLocaleDateString('ru-RU')}`
+    : 'авто-срок не удалось вычислить'
+
+  return `КБЖУ (на 100 г): ${Math.round(n.kcalPer100g)} ккал / Б ${n.proteinPer100g.toFixed(1)} / Ж ${n.fatPer100g.toFixed(1)} / У ${n.carbsPer100g.toFixed(1)}. ${expiryText}.`
+})
+
 onMounted(() => {
   void loadProducts()
 })
@@ -119,9 +159,10 @@ onMounted(() => {
 <template>
   <section class="page-card">
     <h2>Продукты</h2>
-    <p class="subtitle">Учет запасов и сроков годности без сложной математики</p>
+    <p class="subtitle">Добавляйте продукт + количество, остальное рассчитывается автоматически</p>
     <p class="intro">
-      Добавляйте, обновляйте и удаляйте карточки продуктов. Количество и срок годности отображаются прогресс-барами.
+      Форма отправляет запрос во внешние источники: получает КБЖУ и категорию продукта, пересчитывает количество в
+      относительный объём для 1 человека и, если дата не указана, пробует рассчитать срок годности по условиям хранения.
     </p>
 
     <form class="product-form" @submit.prevent="saveProduct">
@@ -134,23 +175,18 @@ onMounted(() => {
         </label>
 
         <label>
-          Наименование
-          <input v-model="form.name" type="text" placeholder="Например, Огурцы" required />
+          Продукт
+          <input v-model="form.name" type="text" placeholder="Например, Греческий йогурт" required />
         </label>
 
         <label>
-          Тематика (опционально)
-          <input v-model="form.theme" type="text" placeholder="Салат / Завтрак / Суп" />
+          Количество (свободный формат)
+          <input v-model="form.quantityInput" type="text" placeholder="например, 1.2 кг / 2 упаковки / 750 мл" required />
         </label>
 
         <label>
-          Количество: {{ form.quantityPercent }}%
-          <input v-model.number="form.quantityPercent" type="range" min="0" max="100" step="5" />
-        </label>
-
-        <label>
-          Годность: {{ form.expiryPercent ?? 0 }}%
-          <input v-model.number="form.expiryPercent" type="range" min="0" max="100" step="5" />
+          Тематика (необязательно)
+          <input v-model="form.theme" type="text" placeholder="Оставьте пустым для автоопределения" />
         </label>
 
         <label>
@@ -160,12 +196,13 @@ onMounted(() => {
       </div>
 
       <div class="form-actions">
-        <button type="submit" class="primary-btn">
-          {{ activeEditId ? 'Обновить продукт' : 'Добавить продукт' }}
+        <button type="submit" class="primary-btn" :disabled="isEnriching">
+          {{ isEnriching ? 'Ищем КБЖУ и хранение…' : activeEditId ? 'Обновить продукт' : 'Добавить продукт' }}
         </button>
         <button v-if="activeEditId" type="button" class="secondary-btn" @click="resetForm">Отменить</button>
       </div>
 
+      <p v-if="enrichmentHint" class="hint-text">{{ enrichmentHint }}</p>
       <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
     </form>
 
@@ -184,7 +221,7 @@ onMounted(() => {
 
         <div class="metric">
           <div class="metric-title">
-            <span>Количество</span>
+            <span>Обеспеченность 1 человека</span>
             <strong>{{ product.quantityPercent }}%</strong>
           </div>
           <progress :value="product.quantityPercent" max="100"></progress>
@@ -262,8 +299,8 @@ label {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  font-size: 0.9rem;
-  color: #1f2937;
+  font-size: 0.88rem;
+  color: #0f172a;
 }
 
 input,
@@ -274,96 +311,105 @@ button {
 
 input,
 select {
-  border: 1px solid #cbd5e1;
+  border: 1px solid #94a3b8;
   border-radius: 0.55rem;
-  padding: 0.45rem 0.6rem;
-  background: #fff;
+  padding: 0.5rem 0.6rem;
 }
 
 .form-actions,
 .card-actions {
+  margin-top: 0.75rem;
   display: flex;
   gap: 0.5rem;
-  margin-top: 0.75rem;
   flex-wrap: wrap;
 }
 
-.primary-btn,
-.secondary-btn,
-.danger-btn {
-  border-radius: 0.65rem;
-  border: 1px solid transparent;
-  padding: 0.45rem 0.85rem;
+button {
+  border: none;
+  border-radius: 0.55rem;
+  padding: 0.5rem 0.8rem;
   cursor: pointer;
 }
 
 .primary-btn {
-  background: #1d4ed8;
+  background: #2563eb;
   color: #fff;
 }
 
+.primary-btn:disabled {
+  opacity: 0.75;
+  cursor: wait;
+}
+
 .secondary-btn {
-  border-color: #94a3b8;
-  background: #fff;
-  color: #1f2937;
+  background: #e2e8f0;
+  color: #1e293b;
 }
 
 .danger-btn {
-  border-color: #dc2626;
-  background: #fff5f5;
-  color: #b91c1c;
-}
-
-.status-text,
-.error-text {
-  margin-top: 0.75rem;
-}
-
-.error-text {
-  color: #b91c1c;
-  font-weight: 600;
+  background: #dc2626;
+  color: #fff;
 }
 
 .product-header {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-}
-
-.emoji {
-  font-size: 2rem;
-  line-height: 1;
+  gap: 0.55rem;
 }
 
 .product-header h3 {
   margin: 0;
+  font-size: 1rem;
 }
 
 .product-theme {
-  margin: 0.25rem 0 0;
+  margin: 0.15rem 0 0;
   color: #475569;
-  font-size: 0.9rem;
+  font-size: 0.84rem;
+}
+
+.emoji {
+  font-size: 1.6rem;
 }
 
 .metric {
-  margin-top: 0.7rem;
+  margin-top: 0.65rem;
 }
 
 .metric-title {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 0.35rem;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  color: #1e293b;
 }
 
 progress {
   width: 100%;
-  height: 0.7rem;
+  height: 0.75rem;
 }
 
 .expiry-date {
   margin: 0.35rem 0 0;
+  font-size: 0.78rem;
   color: #475569;
+}
+
+.status-text {
+  color: #334155;
+  font-size: 0.92rem;
+}
+
+.error-text {
+  color: #b91c1c;
+  margin-top: 0.6rem;
+}
+
+.hint-text {
+  color: #0f172a;
+  margin-top: 0.6rem;
+  background: #dbeafe;
+  border-radius: 0.5rem;
+  padding: 0.5rem;
   font-size: 0.85rem;
 }
 </style>
