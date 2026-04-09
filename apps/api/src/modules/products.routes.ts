@@ -264,14 +264,14 @@ export const registerProductsRoutes = (app: FastifyInstance) => {
   app.post<{ Body: UpsertProductPayload }>('/products', async (request, reply) => {
     const { emoji, name, theme, imageUrl, nutrition, quantityPercent, expiryPercent, expiresAt, quantityInput } = request.body
 
-    if (!name?.trim() || !emoji?.trim()) {
-      return reply.status(400).send({ message: 'Fields "name" and "emoji" are required.' })
+    if (!name?.trim()) {
+      return reply.status(400).send({ message: 'Field "name" is required.' })
     }
 
     const createdAt = nowIso()
     const item: ProductCard = {
       id: crypto.randomUUID(),
-      emoji: emoji.trim(),
+      emoji: emoji?.trim() || "🛒",
       name: name.trim(),
       theme: theme?.trim() || undefined,
       quantityInput: quantityInput?.trim() || undefined,

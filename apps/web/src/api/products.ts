@@ -21,7 +21,6 @@ export type ProductCard = {
 }
 
 export type ProductPayload = {
-  emoji: string
   name: string
   quantityInput: string
   theme?: string
