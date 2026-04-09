@@ -24,6 +24,11 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
+  const requestUrl = new URL(event.request.url)
+  if (requestUrl.pathname.startsWith('/products') || requestUrl.pathname.startsWith('/chat')) {
+    return
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) {
